@@ -10,7 +10,7 @@ if (POLICY CMP0141)
 endif()
 
 project ("BiBuffer")
-add_compile_definitions(-DDEBUG)
+add_compile_options(-DDEBUG)
 # Add source to this project's executable.
 add_executable (BiBuffer  "BiBuffer.hpp" "main.cpp" "MutiBuffer.hpp")
 
