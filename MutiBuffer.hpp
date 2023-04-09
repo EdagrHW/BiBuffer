@@ -30,8 +30,7 @@ public:
 	explicit MutiBuffer(unsigned int writeThreadNum = 2, unsigned int bufferSize = 1024);
 	void write(LoadDataFunc<T> loadDataFunc);
 	void waitAndRead(Buffer<T>& datas);
-	void writeBuffer(LoadDataFunc<T> loadDataFunc);
-	size_t getWriteBufferIndex();
+	void writeBuffer(LoadDataFunc<T> loadDataFunc, size_t taskId);
 	~MutiBuffer() = default;
 private:
 	unsigned int _writeThreadNum; //写线程数
@@ -41,13 +40,13 @@ private:
 	std::vector<int> _bufferEmploy; //缓冲区占用状态
 	std::mutex _bufferStatusMutex; //缓冲区状态临界区
 	int _readBufferIndex; //当前读取的缓冲区的下标
-	std::atomic_int _writeBufferIndex; //当前写的缓冲区的下标
+	int _writeBufferIndex; //当前写的缓冲区的下标
 };
 
 template<typename T>
 inline MutiBuffer<T>::MutiBuffer(unsigned int writeThreadNum, unsigned int bufferSize)
 	:_writeThreadNum(writeThreadNum), _bufferSize(bufferSize)
-	, _threadPool(writeThreadNum), _readBufferIndex(0)
+	, _threadPool(writeThreadNum), _readBufferIndex(0), _writeBufferIndex(0)
 {
 	assert(writeThreadNum >= 1);
 	//缓冲区个数是写线程数的两倍
@@ -63,18 +62,14 @@ template<typename T>
 inline void MutiBuffer<T>::write(LoadDataFunc<T> loadDataFunc)
 {
 	//任务数量超过缓冲区个数就等待
+	static size_t taskNums = 0;
 	while (_threadPool.getTaskNums() >= _buffers.size())
 	{
 		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	}
 	
-	_threadPool.enqueue(&MutiBuffer::writeBuffer, this, loadDataFunc);
-	/*size_t num = datas.size() / _bufferSize;
-	for (size_t i = 0; i < num; i++)
-	{
-		_threadPool.enqueue(&MutiBuffer::writeBuffer, this
-			, std::ref(datas), i * _bufferSize, (i + 1) * _bufferSize);
-	}*/
+	_threadPool.enqueue(&MutiBuffer::writeBuffer, this, loadDataFunc, taskNums);
+	taskNums = (taskNums + 1) % _buffers.size();
 
 }
 
@@ -96,56 +91,29 @@ void MutiBuffer<T>::waitAndRead(Buffer<T>& datas)
 		std::this_thread::sleep_for(std::chrono::microseconds(10));
 
 	}
-	//static int index = 0;
-	//static time_t start = time(NULL);
-	//static time_t end = time(NULL);
-	//while (true)
-	//{
-	//	std::shared_ptr<T> res = _buffers[_readBufferIndex]->read();
-	//	if (res)
-	//	{
-	//		if (index == 0)
-	//		{
-	//			end = time(NULL);
-	//			std::cout << "缓存区：" << _readBufferIndex << "等待了数据时长：" << end - start << std::endl;
-	//			start = time(NULL);
-	//		}
-
-	//		index++;
-	//		return res;
-	//	}
-	//	else if (index >= _bufferSize - 1)
-	//	{
-	//		std::cout << "缓存区：" << _readBufferIndex << "读完" << std::endl;
-	//		end = time(NULL);
-	//		std::cout << "读取一个缓冲区耗费时长: " << end - start << std::endl;
-	//		start = time(NULL);
-	//		index=0;
-	//		//释放当前buffer的占用
-	//		releaseWriteBufferIndex(_readBufferIndex);
-	//		_readBufferIndex = (++_readBufferIndex) % _buffers.size();
-	//	}
-	//	/*else
-	//	{
-	//		std::this_thread::sleep_for(std::chrono::microseconds(1));
-	//	}*/
-	//	else
-	//	{
-	//		return res;
-	//	}
-	//	
-	//}
 }
 
 template<typename T>
-inline void MutiBuffer<T>::writeBuffer(LoadDataFunc<T> loadDataFunc)
+inline void MutiBuffer<T>::writeBuffer(LoadDataFunc<T> loadDataFunc, size_t taskId)
 {
-	size_t curBufferIndex = getWriteBufferIndex();
-	while (curBufferIndex == -1)
+
+	size_t curBufferIndex = 0;
+	while (true)
 	{
-		std::this_thread::sleep_for(std::chrono::microseconds(10));
-		curBufferIndex = getWriteBufferIndex();
+		{
+			std::lock_guard<std::mutex> lk(_bufferStatusMutex);
+			if (_bufferEmploy[taskId] == BUFFER_IDEL)
+			{
+				curBufferIndex = taskId;
+#ifdef DEBUG
+				std::cout << "任务" << taskId << ",开始写数据" << std::endl;
+#endif // DEBUG
+				break;
+			}
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	}
+	
 
 	//调用函数区读取数据
 	Buffer<T> datas;
@@ -159,56 +127,7 @@ inline void MutiBuffer<T>::writeBuffer(LoadDataFunc<T> loadDataFunc)
 	_buffers[curBufferIndex].swap(datas);
 	std::lock_guard<std::mutex> lk(_bufferStatusMutex);
 	_bufferEmploy[curBufferIndex] = BUFFER_CAN_READ;
-	std::cout << "缓冲区:" << curBufferIndex << "，写完" << std::endl;
-	//for (size_t i = 0; i < datas.size(); i++)
-	//{
-	//	_buffers[curBufferIndex]->write(std::move(datas[i]));
-	//}
 	
-}
-
-template<typename T>
-inline size_t MutiBuffer<T>::getWriteBufferIndex()
-{
-	std::lock_guard<std::mutex> lk(_bufferStatusMutex);
-	size_t writeBuffIndex = 0;
-	size_t lastWriteBuffIndex = 0;
-	for (size_t i = 0; i < _bufferEmploy.size(); i++)
-	{
-		if (_bufferEmploy[i] != BUFFER_IDEL)
-		{
-			lastWriteBuffIndex = i;
-		}
-	}
-	if (lastWriteBuffIndex != 0 || _bufferEmploy[0] != BUFFER_IDEL)
-	{
-		writeBuffIndex = (lastWriteBuffIndex + 1) % _bufferEmploy.size();
-	}
-	if (_bufferEmploy[writeBuffIndex] == BUFFER_IDEL)
-	{
-		_bufferEmploy[writeBuffIndex] = BUFFER_CAN_WRITE;
-		return writeBuffIndex;
-	}
-	else
-	{
-		return -1;
-	}
-
-	/*for (size_t i = 0; i < _bufferEmploy.size()-1; i++)
-	{
-		if (_bufferEmploy[i] == BUFFER_CAN_WRITE && _bufferEmploy[i+1] != BUFFER_CAN_WRITE)
-		{
-			writeBuffIndex = i + 1;
-			_bufferEmploy[writeBuffIndex] = BUFFER_CAN_WRITE;
-			return writeBuffIndex;
-		}
-	}
-	if (_bufferEmploy[writeBuffIndex] == BUFFER_IDEL)
-	{
-		_bufferEmploy[writeBuffIndex] = BUFFER_CAN_WRITE;
-		return writeBuffIndex;
-	}
-	return -1;*/
 }
 
 

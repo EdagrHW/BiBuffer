@@ -9,13 +9,13 @@ void loadData(Buffer<size_t>& nums, size_t begin, size_t end)
 	{
 		nums.push_back(std::make_shared<size_t>(i));
 	}
-	std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+	std::this_thread::sleep_for(std::chrono::seconds(20));
 }
 
 int main()
 {
 
-	MutiBuffer<size_t> mi(2, 10);
+	MutiBuffer<size_t> mi(4, 10);
 
 	thread t1([&] 
 		{
@@ -40,7 +40,7 @@ int main()
 				Buffer<size_t> datas;
 				mi.waitAndRead(datas);
 				//模拟数据处理的时长
-				std::this_thread::sleep_for(std::chrono::seconds(1));
+				std::this_thread::sleep_for(std::chrono::seconds(5));
 				end = time(NULL);
 				cout << "读取一个缓冲区花费：" << end - start << endl;
 				for (size_t i = 0; i < datas.size(); i++)
